@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -185,6 +185,20 @@ def init_db():
         """
     )
 
+    # -----------------------------------------------------
+    # Заблокированные пользователи
+    # -----------------------------------------------------
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS banned_users (
+            user_id INTEGER PRIMARY KEY,
+            banned_by INTEGER,
+            banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
@@ -289,6 +303,57 @@ def publish_keyboard(submission_id):
 def is_admin_chat(message: Message):
 
     return message.chat.id in ADMIN_CHATS
+
+
+def is_user_banned(user_id):
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT 1 FROM banned_users WHERE user_id = ? LIMIT 1",
+        (user_id,)
+    )
+
+    result = cursor.fetchone()
+    conn.close()
+
+    return result is not None
+
+
+def ban_user(user_id, banned_by):
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO banned_users (user_id, banned_by)
+        VALUES (?, ?)
+        """,
+        (user_id, banned_by)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def unban_user(user_id):
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM banned_users WHERE user_id = ?",
+        (user_id,)
+    )
+
+    deleted = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return deleted
 
 
 # =========================================================
@@ -827,6 +892,10 @@ async def start_handler(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
+
     await state.clear()
 
     await message.answer(
@@ -1071,6 +1140,10 @@ async def anonymous_take_start(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
+
     await state.set_state(
         TakeState.waiting_for_anonymous_take
     )
@@ -1089,6 +1162,10 @@ async def non_anonymous_take_start(
     message: Message,
     state: FSMContext
 ):
+
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
 
     await state.set_state(
         TakeState.waiting_for_non_anonymous_take
@@ -1109,6 +1186,10 @@ async def question_start(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
+
     await state.clear()
 
     await message.answer(
@@ -1128,6 +1209,14 @@ async def anonymous_question_start(
     callback: CallbackQuery,
     state: FSMContext
 ):
+
+    if is_user_banned(callback.from_user.id):
+        await safe_callback_answer(
+            callback,
+            "🚫 Вы заблокированы.",
+            show_alert=True
+        )
+        return
 
     await safe_callback_answer(
         callback,
@@ -1156,6 +1245,14 @@ async def non_anonymous_question_start(
     state: FSMContext
 ):
 
+    if is_user_banned(callback.from_user.id):
+        await safe_callback_answer(
+            callback,
+            "🚫 Вы заблокированы.",
+            show_alert=True
+        )
+        return
+
     await safe_callback_answer(
         callback,
         "Неанонимный вопрос"
@@ -1179,6 +1276,10 @@ async def admin_application_start(
     message: Message,
     state: FSMContext
 ):
+
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
 
     await state.set_state(
         TakeState.waiting_for_admin_application
@@ -1572,6 +1673,11 @@ async def anonymous_take_received(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
+
     if message.media_group_id:
 
         group_id = message.media_group_id
@@ -1607,6 +1713,11 @@ async def non_anonymous_take_received(
     message: Message,
     state: FSMContext
 ):
+
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
 
     if message.media_group_id:
 
@@ -1648,6 +1759,11 @@ async def anonymous_question_received(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
+
     if message.media_group_id:
 
         group_id = message.media_group_id
@@ -1683,6 +1799,11 @@ async def non_anonymous_question_received(
     message: Message,
     state: FSMContext
 ):
+
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
 
     if message.media_group_id:
 
@@ -1723,6 +1844,11 @@ async def admin_application_received(
     message: Message,
     state: FSMContext
 ):
+
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
 
     if message.media_group_id:
 
@@ -2356,6 +2482,89 @@ def find_submission_by_admin_message(
     conn.close()
 
     return None
+
+
+# =========================================================
+# /BAN И /UNBAN
+# =========================================================
+
+async def get_user_from_admin_reply(message: Message):
+
+    if message.chat.id not in ADMIN_CHATS:
+        return None
+
+    if not message.reply_to_message:
+        await message.answer(
+            "❌ Используй команду ответом на тейк, вопрос или анкету."
+        )
+        return None
+
+    result = find_submission_by_admin_message(
+        message.reply_to_message.message_id
+    )
+
+    if not result:
+        await message.answer(
+            "❌ Не удалось найти пользователя этого сообщения."
+        )
+        return None
+
+    return result
+
+
+@dp.message(Command("ban"))
+async def ban_command(message: Message):
+
+    if message.chat.id not in ADMIN_CHATS:
+        return
+
+    result = await get_user_from_admin_reply(message)
+
+    if not result:
+        return
+
+    user_id = result[1]
+
+    if is_user_banned(user_id):
+        await message.answer(
+            "⚠️ Пользователь уже заблокирован."
+        )
+        return
+
+    ban_user(
+        user_id,
+        message.from_user.id
+    )
+
+    await message.answer(
+        f"🚫 Пользователь {user_id} заблокирован.\n\n"
+        "Он больше не сможет пользоваться ботом во всех разделах."
+    )
+
+
+@dp.message(Command("unban"))
+async def unban_command(message: Message):
+
+    if message.chat.id not in ADMIN_CHATS:
+        return
+
+    result = await get_user_from_admin_reply(message)
+
+    if not result:
+        return
+
+    user_id = result[1]
+
+    if not unban_user(user_id):
+        await message.answer(
+            "⚠️ Пользователь не был заблокирован."
+        )
+        return
+
+    await message.answer(
+        f"✅ Пользователь {user_id} разблокирован.\n\n"
+        "Теперь он снова может пользоваться ботом."
+    )
 
 
 # =========================================================
