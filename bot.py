@@ -2526,9 +2526,7 @@ async def ban_command(message: Message):
     user_id = result[1]
 
     if is_user_banned(user_id):
-        await message.answer(
-            "⚠️ Пользователь уже заблокирован."
-        )
+        await message.answer("Пользователь заблокирован.")
         return
 
     ban_user(
@@ -2536,10 +2534,7 @@ async def ban_command(message: Message):
         message.from_user.id
     )
 
-    await message.answer(
-        f"🚫 Пользователь {user_id} заблокирован.\n\n"
-        "Он больше не сможет пользоваться ботом во всех разделах."
-    )
+    await message.answer("Пользователь заблокирован.")
 
 
 @dp.message(Command("unban"))
@@ -2556,15 +2551,10 @@ async def unban_command(message: Message):
     user_id = result[1]
 
     if not unban_user(user_id):
-        await message.answer(
-            "⚠️ Пользователь не был заблокирован."
-        )
+        await message.answer("Пользователь разблокирован.")
         return
 
-    await message.answer(
-        f"✅ Пользователь {user_id} разблокирован.\n\n"
-        "Теперь он снова может пользоваться ботом."
-    )
+    await message.answer("Пользователь разблокирован.")
 
 
 # =========================================================
