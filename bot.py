@@ -194,10 +194,31 @@ def init_db():
         CREATE TABLE IF NOT EXISTS banned_users (
             user_id INTEGER PRIMARY KEY,
             banned_by INTEGER,
-            banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            username TEXT,
+            name TEXT,
+            message_link TEXT
         )
         """
     )
+
+    cursor.execute("PRAGMA table_info(banned_users)")
+    banned_columns = [row[1] for row in cursor.fetchall()]
+
+    if "username" not in banned_columns:
+        cursor.execute(
+            "ALTER TABLE banned_users ADD COLUMN username TEXT"
+        )
+
+    if "name" not in banned_columns:
+        cursor.execute(
+            "ALTER TABLE banned_users ADD COLUMN name TEXT"
+        )
+
+    if "message_link" not in banned_columns:
+        cursor.execute(
+            "ALTER TABLE banned_users ADD COLUMN message_link TEXT"
+        )
 
     conn.commit()
     conn.close()
@@ -321,21 +342,47 @@ def is_user_banned(user_id):
     return result is not None
 
 
-def ban_user(user_id, banned_by):
+def ban_user(user_id, banned_by, username, name, message_link):
 
     conn = db_connect()
     cursor = conn.cursor()
 
     cursor.execute(
         """
-        INSERT OR REPLACE INTO banned_users (user_id, banned_by)
-        VALUES (?, ?)
+        INSERT OR REPLACE INTO banned_users
+        (user_id, banned_by, username, name, message_link)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (user_id, banned_by)
+        (
+            user_id,
+            banned_by,
+            username,
+            name,
+            message_link
+        )
     )
 
     conn.commit()
     conn.close()
+
+
+def get_banned_users():
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT user_id, username, name, message_link, banned_at
+        FROM banned_users
+        ORDER BY banned_at DESC
+        """
+    )
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return rows
 
 
 def unban_user(user_id):
@@ -2512,6 +2559,24 @@ async def get_user_from_admin_reply(message: Message):
     return result
 
 
+def build_message_link(message):
+
+    chat = message.chat
+
+    if getattr(chat, "username", None):
+        return f"https://t.me/{chat.username}/{message.message_id}"
+
+    if chat.id < 0:
+        chat_id = str(abs(chat.id))
+
+        if chat_id.startswith("100"):
+            chat_id = chat_id[3:]
+
+        return f"https://t.me/c/{chat_id}/{message.message_id}"
+
+    return None
+
+
 @dp.message(Command("ban"))
 async def ban_command(message: Message):
 
@@ -2524,17 +2589,73 @@ async def ban_command(message: Message):
         return
 
     user_id = result[1]
+    replied_message = message.reply_to_message
 
-    if is_user_banned(user_id):
-        await message.answer("Пользователь заблокирован.")
-        return
+    username = None
+    name = None
+
+    try:
+        user_chat = await bot.get_chat(user_id)
+        username = user_chat.username
+        name = user_chat.full_name
+    except Exception:
+        pass
+
+    if not name:
+        name = "Неизвестно"
+
+    message_link = build_message_link(replied_message)
 
     ban_user(
         user_id,
-        message.from_user.id
+        message.from_user.id,
+        username,
+        name,
+        message_link
     )
 
     await message.answer("Пользователь заблокирован.")
+
+
+@dp.message(Command("banlist"))
+async def banlist_command(message: Message):
+
+    if message.chat.id not in ADMIN_CHATS:
+        return
+
+    rows = get_banned_users()
+
+    if not rows:
+        await message.answer("Банлист пуст.")
+        return
+
+    lines = ["<b>🚫 Банлист</b>"]
+
+    for index, (user_id, username, name, message_link, banned_at) in enumerate(rows, 1):
+
+        if username:
+            user_line = f"@{html.escape(username)}"
+        else:
+            user_line = f"ID: <code>{user_id}</code>"
+
+        name = html.escape(name or "Неизвестно")
+
+        if message_link:
+            message_line = f'<a href="{html.escape(message_link, quote=True)}">Открыть сообщение</a>'
+        else:
+            message_line = "Ссылка недоступна"
+
+        lines.append(
+            f"\n<b>{index}. {name}</b>\n"
+            f"Юзер: {user_line}\n"
+            f"ID: <code>{user_id}</code>\n"
+            f"Сообщение: {message_line}"
+        )
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="HTML"
+    )
 
 
 @dp.message(Command("unban"))
