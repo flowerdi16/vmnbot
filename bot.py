@@ -38,6 +38,13 @@ ADMIN_CHAT_ID_1 = int(os.getenv("ADMIN_CHAT_ID_1"))
 ADMIN_CHAT_ID_2 = int(os.getenv("ADMIN_CHAT_ID_2"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
+# ID Premium Emoji, используемых в шаблонах
+PREMIUM_EMOJI_IDS = {
+    "🔮": "5316655898783937992",  # кристалл
+    "🧹": "5316550294128062979",  # метла
+    "⚔️": "5314749070743465097",  # меч
+}
+
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в .env")
 
@@ -251,6 +258,16 @@ def main_menu():
     )
 
 
+def back_menu():
+
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⬅️ Назад")]
+        ],
+        resize_keyboard=True
+    )
+
+
 # =========================================================
 # МЕНЮ ВОПРОСОВ
 # =========================================================
@@ -269,6 +286,12 @@ def question_menu():
                 InlineKeyboardButton(
                     text="Неанонимный вопрос",
                     callback_data="question:nonanonymous"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data="question:back"
                 )
             ]
         ]
@@ -484,7 +507,7 @@ def build_admin_content(message: Message, header: str):
 
 async def safe_callback_answer(
     callback: CallbackQuery,
-    text: str,
+    text: str = "",
     show_alert: bool = False
 ):
 
@@ -642,6 +665,54 @@ def deserialize_entities(data):
             print("Ошибка восстановления entity:", repr(error))
 
     return result
+
+# =========================================================
+# PREMIUM EMOJI ШАБЛОНА
+# =========================================================
+
+def add_premium_emoji_entities(text, entities):
+
+    # Если админ вставил обычный символ одного из поддерживаемых
+    # эмодзи без Premium Emoji, превращаем его в Premium Emoji
+    # с соответствующим custom_emoji_id.
+    existing = {
+        (e.offset, e.length)
+        for e in (entities or [])
+        if e.type == "custom_emoji"
+    }
+
+    result = list(entities or [])
+
+    for emoji, custom_emoji_id in PREMIUM_EMOJI_IDS.items():
+
+        search_from = 0
+
+        while True:
+
+            position = text.find(emoji, search_from)
+
+            if position == -1:
+                break
+
+            offset = utf16_length(text[:position])
+            length = utf16_length(emoji)
+
+            if (offset, length) not in existing:
+                result.append(
+                    MessageEntity(
+                        type="custom_emoji",
+                        offset=offset,
+                        length=length,
+                        custom_emoji_id=custom_emoji_id
+                    )
+                )
+                existing.add((offset, length))
+
+            search_from = position + len(emoji)
+
+    result.sort(key=lambda e: (e.offset, e.length))
+    return result
+
 
 # =========================================================
 # ПРОВЕРКА ШАБЛОНА
@@ -1058,9 +1129,9 @@ async def receive_template(
     template_text = message.text
 
     # В Telegram entities для текста находятся здесь
-    template_entities = (
-        message.entities
-        or []
+    template_entities = add_premium_emoji_entities(
+        template_text,
+        message.entities or []
     )
 
     valid, error_text = validate_template(
@@ -1178,6 +1249,51 @@ async def receive_template(
 
 
 # =========================================================
+# НАЗАД
+# =========================================================
+
+@dp.message(F.text == "⬅️ Назад")
+async def back_handler(message: Message, state: FSMContext):
+
+    await state.clear()
+
+    await message.answer(
+        "Выберите раздел:",
+        reply_markup=main_menu()
+    )
+
+
+# =========================================================
+# ПРАВИЛА
+# =========================================================
+
+@dp.message(F.text == "Правила")
+async def rules_handler(
+    message: Message,
+    state: FSMContext
+):
+
+    await state.clear()
+
+    await message.answer(
+        "Правила написания тейков в ВМН: Нельзя отправлять гс/кружки, спам, порнографию, личные данные. Допустимы темы про религию, политику и т.д., но запрещено выражать поддержку нацизму, фашизму, педофилии и т.п. Тейк должен быть связан с МКМ. Постоянное нытье и сожаления о том, что тейк не опубликован, не принимаются. Админы могут ответить или пообщаться. Полные правила можно увидеть в чате по команде “правила”.\n\n"
+        "1. неанон тейки в анон бота не принимаются, для этого есть неанон бот.\n"
+        "2. гс/кружки не принимаются.\n"
+        "3. тейк должен являться продолжением фразы 'в мкм ненавидят'. больше тейки с ссылками на соо где вы просто кому-то отвечаете не будут приниматься.\n"
+        "3.1. сливы выкладываются в любой форме и при любой формулировке.\n"
+        "4. в тейках можно упоминать темы про: религию, селфхарм, политику, нацизм и т.д, но любая поддержа войны, фашизма, нацизма, рассизма, геноцида, педофилии, инцеста так же запрещена как и в чате.\n"
+        "5. отправлять порнографию/расчлененку в чат/бота запрещено.\n"
+        "6. распространение чужих личных данных запрещено.\n"
+        "7. спам запрещен. за спам считается 3 одинаковых сообщения подряд.\n"
+        "8. если вы пишите про малоизвестного/нового человека в мкм то вставьте юз или ссылку на канал. админы не могут знать всех в мкм и не могут проверить связан ли ваш тейк с мкм.\n"
+        "9. ваше нытье, что люди все злые, что ненависть беспречинна так же больше выкладываться не будет. для этого пишите в другие проекты.\n"
+        "9.1. если ваш тейк не выкладывают больше 12 часов то продублируйте его. опять же, хныкаться, что ваш тейк не пропускают не стоит. мы либо проигнорируем это, либо забаним. давайте уважать время и силы админов.\n"
+        "10. все админы имеют доступ к тому, чтобы вам ответить и с вами поговорить. не удивляйтесь:(\n\n"
+        "правила чата находятся в самом чате. просто напишите команду 'правила' и прочитайте их. проявляйте уважение к администрации. всем удачи!"
+    )
+
+
+# =========================================================
 # АНОН ТЕЙК
 # =========================================================
 
@@ -1196,7 +1312,8 @@ async def anonymous_take_start(
     )
 
     await message.answer(
-        "Отправь свой тейк. Это полностью анонимно."
+        "Отправь свой тейк. Это полностью анонимно.",
+        reply_markup=back_menu()
     )
 
 
@@ -1219,7 +1336,8 @@ async def non_anonymous_take_start(
     )
 
     await message.answer(
-        "Отправь свой тейк."
+        "Отправь свой тейк.",
+        reply_markup=back_menu()
     )
 
 
@@ -1242,6 +1360,37 @@ async def question_start(
     await message.answer(
         "Выберите вариант:",
         reply_markup=question_menu()
+    )
+
+
+# =========================================================
+# НАЗАД ИЗ МЕНЮ ВОПРОСОВ
+# =========================================================
+
+@dp.callback_query(F.data == "question:back")
+async def question_back_handler(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+
+    if is_user_banned(callback.from_user.id):
+        await safe_callback_answer(
+            callback,
+            "🚫 Вы заблокированы.",
+            show_alert=True
+        )
+        return
+
+    await state.clear()
+    await safe_callback_answer(callback)
+
+    await callback.message.edit_text(
+        "Выберите раздел:"
+    )
+
+    await callback.message.answer(
+        "Главное меню:",
+        reply_markup=main_menu()
     )
 
 
@@ -1276,7 +1425,8 @@ async def anonymous_question_start(
 
     await callback.message.answer(
         "Отправьте свой вопрос.\n\n"
-        "Он будет отправлен администрации анонимно."
+        "Он будет отправлен администрации анонимно.",
+        reply_markup=back_menu()
     )
 
 
@@ -1310,7 +1460,8 @@ async def non_anonymous_question_start(
     )
 
     await callback.message.answer(
-        "Отправь свой вопрос."
+        "Отправь свой вопрос.",
+        reply_markup=back_menu()
     )
 
 
@@ -1340,7 +1491,8 @@ async def admin_application_start(
         "4. должность на которую претендуете\n"
         "5. опишите в крации как вы реагируете на стрессовые ситуации, умеете ли решать конфликты? стрессоустойчивы?\n"
         "6. ваше свободное время, сколько времени вы готовы уделять проекту?\n\n"
-        "так же хочу напомнить, что вы подаете заявку на админство в канале где выражается НЕНАВИСТЬ и ее тут много. вы не избежите хейта и оскорблений, будьте готовы к этому."
+        "так же хочу напомнить, что вы подаете заявку на админство в канале где выражается НЕНАВИСТЬ и ее тут много. вы не избежите хейта и оскорблений, будьте готовы к этому.",
+        reply_markup=back_menu()
     )
 
 
@@ -1475,6 +1627,82 @@ def question_header(
 
 
 # =========================================================
+# РАЗБИВКА ДЛИННОГО ТЕКСТА
+# =========================================================
+
+def split_text_entities(text, entities, max_length):
+
+    if utf16_length(text) <= max_length:
+        return [(text, entities or [])]
+
+    chunks = []
+    start_py = 0
+    text_len = len(text)
+
+    while start_py < text_len:
+
+        remaining = text[start_py:]
+        if utf16_length(remaining) <= max_length:
+            end_py = text_len
+        else:
+            end_py = start_py
+            current_u16 = 0
+
+            while end_py < text_len:
+                char_len = utf16_length(text[end_py])
+                if current_u16 + char_len > max_length:
+                    break
+                current_u16 += char_len
+                end_py += 1
+
+            # Стараемся не резать слово.
+            space = text.rfind(" ", start_py, end_py)
+            newline = text.rfind("\n", start_py, end_py)
+            boundary = max(space, newline)
+
+            if boundary > start_py + 100:
+                end_py = boundary + 1
+
+        chunk_text = text[start_py:end_py]
+        chunk_start_u16 = utf16_length(text[:start_py])
+        chunk_end_u16 = utf16_length(text[:end_py])
+
+        chunk_entities = []
+
+        for entity in entities or []:
+            entity_start = entity.offset
+            entity_end = entity.offset + entity.length
+
+            overlap_start = max(entity_start, chunk_start_u16)
+            overlap_end = min(entity_end, chunk_end_u16)
+
+            if overlap_start >= overlap_end:
+                continue
+
+            data = {
+                "type": entity.type,
+                "offset": overlap_start - chunk_start_u16,
+                "length": overlap_end - overlap_start
+            }
+
+            if entity.url is not None:
+                data["url"] = entity.url
+            if entity.language is not None:
+                data["language"] = entity.language
+            if entity.custom_emoji_id is not None:
+                data["custom_emoji_id"] = entity.custom_emoji_id
+            if entity.user is not None:
+                data["user"] = entity.user
+
+            chunk_entities.append(MessageEntity(**data))
+
+        chunks.append((chunk_text, chunk_entities))
+        start_py = end_py
+
+    return chunks
+
+
+# =========================================================
 # ОТПРАВКА ОДИНОЧНОГО СООБЩЕНИЯ АДМИНАМ
 # =========================================================
 
@@ -1526,6 +1754,17 @@ async def send_single_submission_to_admins(
     sent_1 = None
     sent_2 = None
 
+    # Подпись к медиа в Telegram ограничена 1024 UTF-16 единицами.
+    # Поэтому длинный тейк отправляем: первая часть как caption,
+    # остальные части отдельными сообщениями.
+    caption_chunks = split_text_entities(
+        full_text,
+        content_entities,
+        1024
+    )
+
+    first_caption, first_entities = caption_chunks[0]
+
     if message.photo:
 
         file_id = message.photo[-1].file_id
@@ -1533,16 +1772,16 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_photo(
             ADMIN_CHAT_ID_1,
             photo=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_photo(
             ADMIN_CHAT_ID_2,
             photo=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
@@ -1553,16 +1792,16 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_video(
             ADMIN_CHAT_ID_1,
             video=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_video(
             ADMIN_CHAT_ID_2,
             video=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
@@ -1573,33 +1812,65 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_document(
             ADMIN_CHAT_ID_1,
             document=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_document(
             ADMIN_CHAT_ID_2,
             document=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
     else:
 
-        sent_1 = await bot.send_message(
-            ADMIN_CHAT_ID_1,
+        chunks = split_text_entities(
             full_text,
-            entities=content_entities,
-            reply_markup=keyboard
+            content_entities,
+            4096
         )
 
-        sent_2 = await bot.send_message(
+        sent_1 = None
+        sent_2 = None
+
+        for index, (chunk_text, chunk_entities) in enumerate(chunks):
+
+            current_keyboard = keyboard if index == 0 else None
+
+            current_1 = await bot.send_message(
+                ADMIN_CHAT_ID_1,
+                chunk_text,
+                entities=chunk_entities,
+                reply_markup=current_keyboard
+            )
+
+            current_2 = await bot.send_message(
+                ADMIN_CHAT_ID_2,
+                chunk_text,
+                entities=chunk_entities,
+                reply_markup=current_keyboard
+            )
+
+            if index == 0:
+                sent_1 = current_1
+                sent_2 = current_2
+
+    # Остаток длинной подписи отправляем обычными сообщениями.
+    for chunk_text, chunk_entities in caption_chunks[1:]:
+
+        await bot.send_message(
+            ADMIN_CHAT_ID_1,
+            chunk_text,
+            entities=chunk_entities
+        )
+
+        await bot.send_message(
             ADMIN_CHAT_ID_2,
-            full_text,
-            entities=content_entities,
-            reply_markup=keyboard
+            chunk_text,
+            entities=chunk_entities
         )
 
     conn = db_connect()
@@ -2975,6 +3246,14 @@ async def publish_handler(
 
             media_group = []
 
+            public_chunks = split_text_entities(
+                public_text,
+                public_entities,
+                1024
+            )
+
+            first_public_text, first_public_entities = public_chunks[0]
+
             for index, item in enumerate(
                 album_data
             ):
@@ -2983,13 +3262,13 @@ async def publish_handler(
                 item_file_id = item["file_id"]
 
                 current_caption = (
-                    public_text
+                    first_public_text
                     if index == 0
                     else None
                 )
 
                 current_entities = (
-                    public_entities
+                    first_public_entities
                     if index == 0
                     else None
                 )
@@ -3035,6 +3314,15 @@ async def publish_handler(
                 media=media_group
             )
 
+            # Caption у первого элемента альбома ограничен 1024 символами.
+            # Остаток длинного тейка публикуем отдельными сообщениями.
+            for chunk_text, chunk_entities in public_chunks[1:]:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
+
         # =================================================
         # ТЕКСТ
         # =================================================
@@ -3050,11 +3338,18 @@ async def publish_handler(
                 )
             )
 
-            await bot.send_message(
-                CHANNEL_ID,
+            chunks = split_text_entities(
                 public_text,
-                entities=public_entities
+                public_entities,
+                4096
             )
+
+            for chunk_text, chunk_entities in chunks:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
 
         # =================================================
         # ФОТО
@@ -3071,12 +3366,27 @@ async def publish_handler(
                 )
             )
 
+            public_chunks = split_text_entities(
+                public_text,
+                public_entities,
+                1024
+            )
+
+            first_text, first_entities = public_chunks[0]
+
             await bot.send_photo(
                 CHANNEL_ID,
                 photo=file_id,
-                caption=public_text,
-                caption_entities=public_entities
+                caption=first_text,
+                caption_entities=first_entities
             )
+
+            for chunk_text, chunk_entities in public_chunks[1:]:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
 
         # =================================================
         # ВИДЕО
@@ -3093,12 +3403,27 @@ async def publish_handler(
                 )
             )
 
+            public_chunks = split_text_entities(
+                public_text,
+                public_entities,
+                1024
+            )
+
+            first_text, first_entities = public_chunks[0]
+
             await bot.send_video(
                 CHANNEL_ID,
                 video=file_id,
-                caption=public_text,
-                caption_entities=public_entities
+                caption=first_text,
+                caption_entities=first_entities
             )
+
+            for chunk_text, chunk_entities in public_chunks[1:]:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
 
         # =================================================
         # ДОКУМЕНТ
@@ -3115,12 +3440,27 @@ async def publish_handler(
                 )
             )
 
+            public_chunks = split_text_entities(
+                public_text,
+                public_entities,
+                1024
+            )
+
+            first_text, first_entities = public_chunks[0]
+
             await bot.send_document(
                 CHANNEL_ID,
                 document=file_id,
-                caption=public_text,
-                caption_entities=public_entities
+                caption=first_text,
+                caption_entities=first_entities
             )
+
+            for chunk_text, chunk_entities in public_chunks[1:]:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
 
         else:
 
@@ -3188,31 +3528,6 @@ async def publish_handler(
                 pass
 
 
-# =========================================================
-# ПРАВИЛА
-# =========================================================
-
-@dp.message(F.text == "Правила")
-async def rules_handler(
-    message: Message
-):
-
-    await message.answer(
-        "Правила написания тейков в ВМН: Нельзя отправлять гс/кружки, спам, порнографию, личные данные. Допустимы темы про религию, политику и т.д., но запрещено выражать поддержку нацизму, фашизму, педофилии и т.п. Тейк должен быть связан с МКМ. Постоянное нытье и сожаления о том, что тейк не опубликован, не принимаются. Админы могут ответить или пообщаться. Полные правила можно увидеть в чате по команде “правила”.\n\n"
-        "1. неанон тейки в анон бота не принимаются, для этого есть неанон бот.\n"
-        "2. гс/кружки не принимаются.\n"
-        "3. тейк должен являться продолжением фразы 'в мкм ненавидят'. больше тейки с ссылками на соо где вы просто кому-то отвечаете не будут приниматься.\n"
-        "3.1. сливы выкладываются в любой форме и при любой формулировке.\n"
-        "4. в тейках можно упоминать темы про: религию, селфхарм, политику, нацизм и т.д, но любая поддержа войны, фашизма, нацизма, рассизма, геноцида, педофилии, инцеста так же запрещена как и в чате.\n"
-        "5. отправлять порнографию/расчлененку в чат/бота запрещено.\n"
-        "6. распространение чужих личных данных запрещено.\n"
-        "7. спам запрещен. за спам считается 3 одинаковых сообщения подряд.\n"
-        "8. если вы пишите про малоизвестного/нового человека в мкм то вставьте юз или ссылку на канал. админы не могут знать всех в мкм и не могут проверить связан ли ваш тейк с мкм.\n"
-        "9. ваше нытье, что люди все злые, что ненависть беспречинна так же больше выкладываться не будет. для этого пишите в другие проекты.\n"
-        "9.1. если ваш тейк не выкладывают больше 12 часов то продублируйте его. опять же, хныкаться, что ваш тейк не пропускают не стоит. мы либо проигнорируем это, либо забаним. давайте уважать время и силы админов.\n"
-        "10. все админы имеют доступ к тому, чтобы вам ответить и с вами поговорить. не удивляйтесь:(\n\n"
-        "правила чата находятся в самом чате. просто напишите команду 'правила' и прочитайте их. проявляйте уважение к администрации. всем удачи!"
-    )
 
 
 # =========================================================
