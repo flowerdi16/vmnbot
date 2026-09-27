@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -37,6 +37,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID_1 = int(os.getenv("ADMIN_CHAT_ID_1"))
 ADMIN_CHAT_ID_2 = int(os.getenv("ADMIN_CHAT_ID_2"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+
+# ID Premium Emoji, используемых в шаблонах
+PREMIUM_EMOJI_IDS = {
+    "🔮": "5316655898783937992",  # кристалл
+    "🧹": "5316550294128062979",  # метла
+    "⚔️": "5314749070743465097",  # меч
+}
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в .env")
@@ -68,6 +75,11 @@ class TakeState(StatesGroup):
 
     # Анкета
     waiting_for_admin_application = State()
+
+
+class TemplateState(StatesGroup):
+
+    waiting_for_template = State()
 
 
 # =========================================================
@@ -180,6 +192,41 @@ def init_db():
         """
     )
 
+    # -----------------------------------------------------
+    # Заблокированные пользователи
+    # -----------------------------------------------------
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS banned_users (
+            user_id INTEGER PRIMARY KEY,
+            banned_by INTEGER,
+            banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            username TEXT,
+            name TEXT,
+            message_link TEXT
+        )
+        """
+    )
+
+    cursor.execute("PRAGMA table_info(banned_users)")
+    banned_columns = [row[1] for row in cursor.fetchall()]
+
+    if "username" not in banned_columns:
+        cursor.execute(
+            "ALTER TABLE banned_users ADD COLUMN username TEXT"
+        )
+
+    if "name" not in banned_columns:
+        cursor.execute(
+            "ALTER TABLE banned_users ADD COLUMN name TEXT"
+        )
+
+    if "message_link" not in banned_columns:
+        cursor.execute(
+            "ALTER TABLE banned_users ADD COLUMN message_link TEXT"
+        )
+
     conn.commit()
     conn.close()
 
@@ -211,6 +258,16 @@ def main_menu():
     )
 
 
+def back_menu():
+
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⬅️ Назад")]
+        ],
+        resize_keyboard=True
+    )
+
+
 # =========================================================
 # МЕНЮ ВОПРОСОВ
 # =========================================================
@@ -229,6 +286,36 @@ def question_menu():
                 InlineKeyboardButton(
                     text="Неанонимный вопрос",
                     callback_data="question:nonanonymous"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data="question:back"
+                )
+            ]
+        ]
+    )
+
+
+# =========================================================
+# МЕНЮ /VID
+# =========================================================
+
+def template_menu():
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Оформление анон тейка",
+                    callback_data="vid:anonymous"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Оформление неанон тейка",
+                    callback_data="vid:nonanonymous"
                 )
             ]
         ]
@@ -260,6 +347,83 @@ def publish_keyboard(submission_id):
 def is_admin_chat(message: Message):
 
     return message.chat.id in ADMIN_CHATS
+
+
+def is_user_banned(user_id):
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT 1 FROM banned_users WHERE user_id = ? LIMIT 1",
+        (user_id,)
+    )
+
+    result = cursor.fetchone()
+    conn.close()
+
+    return result is not None
+
+
+def ban_user(user_id, banned_by, username, name, message_link):
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO banned_users
+        (user_id, banned_by, username, name, message_link)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            banned_by,
+            username,
+            name,
+            message_link
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def get_banned_users():
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT user_id, username, name, message_link, banned_at
+        FROM banned_users
+        ORDER BY banned_at DESC
+        """
+    )
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return rows
+
+
+def unban_user(user_id):
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM banned_users WHERE user_id = ?",
+        (user_id,)
+    )
+
+    deleted = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return deleted
 
 
 # =========================================================
@@ -343,7 +507,7 @@ def build_admin_content(message: Message, header: str):
 
 async def safe_callback_answer(
     callback: CallbackQuery,
-    text: str,
+    text: str = "",
     show_alert: bool = False
 ):
 
@@ -410,6 +574,79 @@ def serialize_entities(entities):
         result.append(data)
 
     return result
+# =========================================================
+# ПОЛУЧЕНИЕ ШАБЛОНА
+# =========================================================
+
+def get_template(template_type):
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            template_text,
+            template_entities
+        FROM templates
+        WHERE template_type = ?
+        """,
+        (template_type,)
+    )
+
+    result = cursor.fetchone()
+
+    conn.close()
+
+    if not result:
+
+        return None
+
+    return result[0], result[1]
+
+
+# =========================================================
+# СОХРАНЕНИЕ ШАБЛОНА
+# =========================================================
+
+def save_template(
+    template_type,
+    text,
+    entities
+):
+
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    entities_json = json.dumps(
+        serialize_entities(entities),
+        ensure_ascii=False
+    )
+
+    cursor.execute(
+        """
+        INSERT INTO templates (
+            template_type,
+            template_text,
+            template_entities
+        )
+        VALUES (?, ?, ?)
+        ON CONFLICT(template_type)
+        DO UPDATE SET
+            template_text = excluded.template_text,
+            template_entities = excluded.template_entities,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            template_type,
+            text,
+            entities_json
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
 def deserialize_entities(data):
     if not data:
         return []
@@ -429,6 +666,339 @@ def deserialize_entities(data):
 
     return result
 
+# =========================================================
+# PREMIUM EMOJI ШАБЛОНА
+# =========================================================
+
+def add_premium_emoji_entities(text, entities):
+
+    # Если админ вставил обычный символ одного из поддерживаемых
+    # эмодзи без Premium Emoji, превращаем его в Premium Emoji
+    # с соответствующим custom_emoji_id.
+    existing = {
+        (e.offset, e.length)
+        for e in (entities or [])
+        if e.type == "custom_emoji"
+    }
+
+    result = list(entities or [])
+
+    for emoji, custom_emoji_id in PREMIUM_EMOJI_IDS.items():
+
+        search_from = 0
+
+        while True:
+
+            position = text.find(emoji, search_from)
+
+            if position == -1:
+                break
+
+            offset = utf16_length(text[:position])
+            length = utf16_length(emoji)
+
+            if (offset, length) not in existing:
+                result.append(
+                    MessageEntity(
+                        type="custom_emoji",
+                        offset=offset,
+                        length=length,
+                        custom_emoji_id=custom_emoji_id
+                    )
+                )
+                existing.add((offset, length))
+
+            search_from = position + len(emoji)
+
+    result.sort(key=lambda e: (e.offset, e.length))
+    return result
+
+
+# =========================================================
+# ПРОВЕРКА ШАБЛОНА
+# =========================================================
+
+def validate_template(
+    text,
+    entities
+):
+
+    if "{text}" not in text:
+
+        return (
+            False,
+            "❌ В шаблоне нет `{text}`.\n\n"
+            "Добавь `{text}` туда, куда бот должен вставлять тейк."
+        )
+
+    markers = [
+        "{text}",
+        "{username}",
+        "{name}"
+    ]
+
+    # Переменные должны быть целыми entities или находиться
+    # внутри entity целиком. Частичное пересечение запрещаем.
+    for marker in markers:
+
+        search_from = 0
+
+        while True:
+
+            position = text.find(marker, search_from)
+
+            if position == -1:
+                break
+
+            marker_start = utf16_length(text[:position])
+            marker_end = marker_start + utf16_length(marker)
+
+            for entity in entities or []:
+
+                entity_start = entity.offset
+                entity_end = entity.offset + entity.length
+
+                # Entity полностью до/после переменной.
+                if entity_end <= marker_start or entity_start >= marker_end:
+                    continue
+
+                # Entity полностью покрывает переменную:
+                # например жирный {text}. Это разрешено.
+                if entity_start <= marker_start and entity_end >= marker_end:
+                    continue
+
+                # Entity ровно совпадает с переменной:
+                # например жирный только {text}. Разрешено.
+                if entity_start == marker_start and entity_end == marker_end:
+                    continue
+
+                # Entity частично пересекает переменную — такое
+                # оформление невозможно корректно перенести.
+                return (
+                    False,
+                    f"❌ Форматирование частично пересекает `{marker}`.\n\n"
+                    f"Можно выделить `{marker}` целиком (например жирным), "
+                    f"но нельзя выделить только его часть."
+                )
+
+            search_from = position + len(marker)
+
+    return True, None
+
+
+# =========================================================
+# ПРИМЕНЕНИЕ ШАБЛОНА
+# =========================================================
+
+def apply_template(
+    template_text,
+    template_entities,
+    replacements,
+    user_entities=None
+):
+
+    markers = [
+        "{text}",
+        "{username}",
+        "{name}"
+    ]
+
+    replacements_list = []
+
+    for marker in markers:
+
+        value = replacements.get(marker, marker)
+
+        search_from = 0
+
+        while True:
+
+            position = template_text.find(marker, search_from)
+
+            if position == -1:
+                break
+
+            start_u16 = utf16_length(template_text[:position])
+            end_u16 = start_u16 + utf16_length(marker)
+
+            replacements_list.append({
+                "start_u16": start_u16,
+                "end_u16": end_u16,
+                "start_py": position,
+                "end_py": position + len(marker),
+                "value": value,
+                "marker": marker
+            })
+
+            search_from = position + len(marker)
+
+    if not replacements_list:
+        return template_text, template_entities or []
+
+    replacements_list.sort(key=lambda item: item["start_py"])
+
+    # -----------------------------------------------------
+    # Собираем итоговый текст.
+    # -----------------------------------------------------
+
+    parts = []
+    last_position = 0
+
+    for replacement in replacements_list:
+
+        parts.append(
+            template_text[
+                last_position:replacement["start_py"]
+            ]
+        )
+        parts.append(replacement["value"])
+        last_position = replacement["end_py"]
+
+    parts.append(template_text[last_position:])
+
+    final_text = "".join(parts)
+
+    # -----------------------------------------------------
+    # Переносим только entities ШАБЛОНА.
+    # Entities исходного пользовательского сообщения сюда
+    # вообще не передаются, поэтому пользователь не может
+    # изменить оформление публикации.
+    # -----------------------------------------------------
+
+    final_entities = []
+
+    for entity in template_entities or []:
+
+        original_start = entity.offset
+        original_end = entity.offset + entity.length
+        new_start = original_start
+        new_end = original_end
+        valid = True
+
+        for replacement in replacements_list:
+
+            marker_start = replacement["start_u16"]
+            marker_end = replacement["end_u16"]
+            marker_length = marker_end - marker_start
+            replacement_length = utf16_length(replacement["value"])
+            delta = replacement_length - marker_length
+
+            # Entity полностью после переменной — сдвигаем.
+            if original_start >= marker_end:
+                new_start += delta
+                new_end += delta
+                continue
+
+            # Entity полностью до переменной — ничего не делаем.
+            if original_end <= marker_start:
+                continue
+
+            # Entity полностью содержит переменную.
+            # Например: **{text}**.
+            if original_start <= marker_start and original_end >= marker_end:
+                new_end += delta
+                continue
+
+            # Entity ровно равна переменной.
+            # Например: **{text}** с entity только на {text}.
+            if original_start == marker_start and original_end == marker_end:
+                new_end = new_start + replacement_length
+                continue
+
+            valid = False
+            break
+
+        if not valid:
+            raise ValueError(
+                "Одно из форматирований шаблона частично "
+                "пересекает переменную. Форматируй переменную "
+                "целиком или не затрагивай её."
+            )
+
+        entity_data = {
+            "type": entity.type,
+            "offset": new_start,
+            "length": new_end - new_start
+        }
+
+        if entity.url is not None:
+            entity_data["url"] = entity.url
+
+        if entity.language is not None:
+            entity_data["language"] = entity.language
+
+        if entity.custom_emoji_id is not None:
+            entity_data["custom_emoji_id"] = entity.custom_emoji_id
+
+        if entity.user is not None:
+            entity_data["user"] = entity.user
+
+        final_entities.append(MessageEntity(**entity_data))
+
+    # -----------------------------------------------------
+    # Переносим форматирование исходного текста пользователя.
+    # Оно относится именно к значению {text}.
+    # Например, ссылка внутри слова пользователя сохраняется.
+    # -----------------------------------------------------
+
+    user_entities = user_entities or []
+
+    for source_entity in user_entities:
+
+        source_data = {
+            "type": source_entity.type,
+            "offset": source_entity.offset,
+            "length": source_entity.length
+        }
+
+        if source_entity.url is not None:
+            source_data["url"] = source_entity.url
+
+        if source_entity.language is not None:
+            source_data["language"] = source_entity.language
+
+        if source_entity.custom_emoji_id is not None:
+            source_data["custom_emoji_id"] = source_entity.custom_emoji_id
+
+        if source_entity.user is not None:
+            source_data["user"] = source_entity.user
+
+        # Пользовательские entities находятся внутри исходного {text}.
+        # Находим позицию этого маркера в итоговом тексте.
+        text_replacement = next(
+            (
+                item
+                for item in replacements_list
+                if item["marker"] == "{text}"
+            ),
+            None
+        )
+
+        if text_replacement is None:
+            continue
+
+        entity_end = (
+            source_entity.offset + source_entity.length
+        )
+
+        text_length = utf16_length(
+            text_replacement["value"]
+        )
+
+        # Защита от повреждённых/устаревших entities.
+        if source_entity.offset < 0 or entity_end > text_length:
+            continue
+
+        source_data["offset"] = (
+            text_replacement["start_u16"]
+            + source_entity.offset
+        )
+
+        final_entities.append(
+            MessageEntity(**source_data)
+        )
+
+    return final_text, final_entities
 
 # =========================================================
 # START
@@ -440,12 +1010,286 @@ async def start_handler(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
+
     await state.clear()
 
     await message.answer(
         "Добро пожаловать!\n\n"
         "Выберите раздел:",
         reply_markup=main_menu()
+    )
+
+
+# =========================================================
+# /VID
+# =========================================================
+
+@dp.message(
+    F.text == "/vid"
+)
+async def vid_handler(
+    message: Message,
+    state: FSMContext
+):
+
+    if not is_admin_chat(message):
+
+        return
+
+    await state.clear()
+
+    await message.answer(
+        "Выбери оформление, которое хочешь изменить:",
+        reply_markup=template_menu()
+    )
+
+
+# =========================================================
+# ВЫБОР ШАБЛОНА
+# =========================================================
+
+@dp.callback_query(
+    F.data.startswith("vid:")
+)
+async def template_type_handler(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+
+    if callback.message.chat.id not in ADMIN_CHATS:
+
+        await safe_callback_answer(
+            callback,
+            "Нет доступа.",
+            show_alert=True
+        )
+
+        return
+
+    template_type = (
+        callback.data.split(":", 1)[1]
+    )
+
+    if template_type == "anonymous":
+
+        title = "Анонимный тейк"
+
+    else:
+
+        title = "Неанонимный тейк"
+
+    await safe_callback_answer(
+        callback,
+        "Ожидаю шаблон"
+    )
+
+    await state.update_data(
+        template_type=template_type
+    )
+
+    await state.set_state(
+        TemplateState.waiting_for_template
+    )
+
+    await callback.message.answer(
+        f"{title}\n\n"
+        "Отправь мне готовый шаблон."
+    )
+
+
+# =========================================================
+# ПОЛУЧЕНИЕ ШАБЛОНА
+# =========================================================
+
+@dp.message(
+    TemplateState.waiting_for_template
+)
+async def receive_template(
+    message: Message,
+    state: FSMContext
+):
+
+    if message.chat.id not in ADMIN_CHATS:
+
+        return
+
+    if not message.text:
+
+        await message.answer(
+            "❌ Шаблон должен быть отправлен "
+            "обычным текстовым сообщением.\n\n"
+            "Premium Emoji внутри текста сохранятся."
+        )
+
+        return
+
+    template_text = message.text
+
+    # В Telegram entities для текста находятся здесь
+    template_entities = add_premium_emoji_entities(
+        template_text,
+        message.entities or []
+    )
+
+    valid, error_text = validate_template(
+        template_text,
+        template_entities
+    )
+
+    if not valid:
+
+        await message.answer(
+            error_text
+        )
+
+        return
+
+    data = await state.get_data()
+
+    template_type = data.get(
+        "template_type"
+    )
+
+    if not template_type:
+
+        await state.clear()
+
+        await message.answer(
+            "❌ Не удалось определить тип шаблона.\n"
+            "Начни заново через /vid."
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # Проверяем, что шаблон реально собирается
+    # -----------------------------------------------------
+
+    try:
+
+        preview_text, preview_entities = (
+            apply_template(
+                template_text,
+                template_entities,
+                {
+                    "{text}": "ТЕКСТ ТЕЙКА",
+                    "{username}": "@username",
+                    "{name}": "Имя пользователя"
+                }
+            )
+        )
+
+    except Exception as error:
+
+        await state.clear()
+
+        print(
+            "Ошибка создания предпросмотра:",
+            repr(error)
+        )
+
+        await message.answer(
+            "❌ Не удалось создать предпросмотр.\n\n"
+            f"{error}\n\n"
+            "Состояние сброшено. Если хочешь изменить "
+            "шаблон, снова введи /vid."
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # Сохраняем сразу
+    # -----------------------------------------------------
+
+    save_template(
+        template_type,
+        template_text,
+        template_entities
+    )
+
+    await state.clear()
+
+    # -----------------------------------------------------
+    # Предпросмотр
+    # -----------------------------------------------------
+
+    await message.answer(
+        "👀 Предпросмотр нового оформления:"
+    )
+
+    try:
+
+        await message.answer(
+            preview_text,
+            entities=preview_entities
+        )
+
+    except TelegramBadRequest as error:
+
+        print(
+            "Ошибка предпросмотра шаблона:",
+            repr(error)
+        )
+
+        await message.answer(
+            "⚠️ Шаблон сохранён, "
+            "но Telegram не смог показать предпросмотр.\n\n"
+            "Проверь Premium Emoji в самом шаблоне."
+        )
+
+        return
+
+    await message.answer(
+        "✅ Шаблон сохранён и уже используется "
+        "для новых публикаций."
+    )
+
+
+# =========================================================
+# НАЗАД
+# =========================================================
+
+@dp.message(F.text == "⬅️ Назад")
+async def back_handler(message: Message, state: FSMContext):
+
+    await state.clear()
+
+    await message.answer(
+        "Выберите раздел:",
+        reply_markup=main_menu()
+    )
+
+
+# =========================================================
+# ПРАВИЛА
+# =========================================================
+
+@dp.message(F.text == "Правила")
+async def rules_handler(
+    message: Message,
+    state: FSMContext
+):
+
+    await state.clear()
+
+    await message.answer(
+        "Правила написания тейков в ВМН: Нельзя отправлять гс/кружки, спам, порнографию, личные данные. Допустимы темы про религию, политику и т.д., но запрещено выражать поддержку нацизму, фашизму, педофилии и т.п. Тейк должен быть связан с МКМ. Постоянное нытье и сожаления о том, что тейк не опубликован, не принимаются. Админы могут ответить или пообщаться. Полные правила можно увидеть в чате по команде “правила”.\n\n"
+        "1. неанон тейки в анон бота не принимаются, для этого есть неанон бот.\n"
+        "2. гс/кружки не принимаются.\n"
+        "3. тейк должен являться продолжением фразы 'в мкм ненавидят'. больше тейки с ссылками на соо где вы просто кому-то отвечаете не будут приниматься.\n"
+        "3.1. сливы выкладываются в любой форме и при любой формулировке.\n"
+        "4. в тейках можно упоминать темы про: религию, селфхарм, политику, нацизм и т.д, но любая поддержа войны, фашизма, нацизма, рассизма, геноцида, педофилии, инцеста так же запрещена как и в чате.\n"
+        "5. отправлять порнографию/расчлененку в чат/бота запрещено.\n"
+        "6. распространение чужих личных данных запрещено.\n"
+        "7. спам запрещен. за спам считается 3 одинаковых сообщения подряд.\n"
+        "8. если вы пишите про малоизвестного/нового человека в мкм то вставьте юз или ссылку на канал. админы не могут знать всех в мкм и не могут проверить связан ли ваш тейк с мкм.\n"
+        "9. ваше нытье, что люди все злые, что ненависть беспречинна так же больше выкладываться не будет. для этого пишите в другие проекты.\n"
+        "9.1. если ваш тейк не выкладывают больше 12 часов то продублируйте его. опять же, хныкаться, что ваш тейк не пропускают не стоит. мы либо проигнорируем это, либо забаним. давайте уважать время и силы админов.\n"
+        "10. все админы имеют доступ к тому, чтобы вам ответить и с вами поговорить. не удивляйтесь:(\n\n"
+        "правила чата находятся в самом чате. просто напишите команду 'правила' и прочитайте их. проявляйте уважение к администрации. всем удачи!"
     )
 
 
@@ -459,12 +1303,17 @@ async def anonymous_take_start(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
+
     await state.set_state(
         TakeState.waiting_for_anonymous_take
     )
 
     await message.answer(
-        "Отправь свой тейк. Это полностью анонимно."
+        "Отправь свой тейк. Это полностью анонимно.",
+        reply_markup=back_menu()
     )
 
 
@@ -478,12 +1327,17 @@ async def non_anonymous_take_start(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
+
     await state.set_state(
         TakeState.waiting_for_non_anonymous_take
     )
 
     await message.answer(
-        "Отправь свой тейк."
+        "Отправь свой тейк.",
+        reply_markup=back_menu()
     )
 
 
@@ -497,11 +1351,46 @@ async def question_start(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
+
     await state.clear()
 
     await message.answer(
         "Выберите вариант:",
         reply_markup=question_menu()
+    )
+
+
+# =========================================================
+# НАЗАД ИЗ МЕНЮ ВОПРОСОВ
+# =========================================================
+
+@dp.callback_query(F.data == "question:back")
+async def question_back_handler(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+
+    if is_user_banned(callback.from_user.id):
+        await safe_callback_answer(
+            callback,
+            "🚫 Вы заблокированы.",
+            show_alert=True
+        )
+        return
+
+    await state.clear()
+    await safe_callback_answer(callback)
+
+    await callback.message.edit_text(
+        "Выберите раздел:"
+    )
+
+    await callback.message.answer(
+        "Главное меню:",
+        reply_markup=main_menu()
     )
 
 
@@ -517,6 +1406,14 @@ async def anonymous_question_start(
     state: FSMContext
 ):
 
+    if is_user_banned(callback.from_user.id):
+        await safe_callback_answer(
+            callback,
+            "🚫 Вы заблокированы.",
+            show_alert=True
+        )
+        return
+
     await safe_callback_answer(
         callback,
         "Анонимный вопрос"
@@ -528,7 +1425,8 @@ async def anonymous_question_start(
 
     await callback.message.answer(
         "Отправьте свой вопрос.\n\n"
-        "Он будет отправлен администрации анонимно."
+        "Он будет отправлен администрации анонимно.",
+        reply_markup=back_menu()
     )
 
 
@@ -544,6 +1442,14 @@ async def non_anonymous_question_start(
     state: FSMContext
 ):
 
+    if is_user_banned(callback.from_user.id):
+        await safe_callback_answer(
+            callback,
+            "🚫 Вы заблокированы.",
+            show_alert=True
+        )
+        return
+
     await safe_callback_answer(
         callback,
         "Неанонимный вопрос"
@@ -554,7 +1460,8 @@ async def non_anonymous_question_start(
     )
 
     await callback.message.answer(
-        "Отправь свой вопрос."
+        "Отправь свой вопрос.",
+        reply_markup=back_menu()
     )
 
 
@@ -568,6 +1475,10 @@ async def admin_application_start(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        return
+
     await state.set_state(
         TakeState.waiting_for_admin_application
     )
@@ -580,7 +1491,8 @@ async def admin_application_start(
         "4. должность на которую претендуете\n"
         "5. опишите в крации как вы реагируете на стрессовые ситуации, умеете ли решать конфликты? стрессоустойчивы?\n"
         "6. ваше свободное время, сколько времени вы готовы уделять проекту?\n\n"
-        "так же хочу напомнить, что вы подаете заявку на админство в канале где выражается НЕНАВИСТЬ и ее тут много. вы не избежите хейта и оскорблений, будьте готовы к этому."
+        "так же хочу напомнить, что вы подаете заявку на админство в канале где выражается НЕНАВИСТЬ и ее тут много. вы не избежите хейта и оскорблений, будьте готовы к этому.",
+        reply_markup=back_menu()
     )
 
 
@@ -715,6 +1627,82 @@ def question_header(
 
 
 # =========================================================
+# РАЗБИВКА ДЛИННОГО ТЕКСТА
+# =========================================================
+
+def split_text_entities(text, entities, max_length):
+
+    if utf16_length(text) <= max_length:
+        return [(text, entities or [])]
+
+    chunks = []
+    start_py = 0
+    text_len = len(text)
+
+    while start_py < text_len:
+
+        remaining = text[start_py:]
+        if utf16_length(remaining) <= max_length:
+            end_py = text_len
+        else:
+            end_py = start_py
+            current_u16 = 0
+
+            while end_py < text_len:
+                char_len = utf16_length(text[end_py])
+                if current_u16 + char_len > max_length:
+                    break
+                current_u16 += char_len
+                end_py += 1
+
+            # Стараемся не резать слово.
+            space = text.rfind(" ", start_py, end_py)
+            newline = text.rfind("\n", start_py, end_py)
+            boundary = max(space, newline)
+
+            if boundary > start_py + 100:
+                end_py = boundary + 1
+
+        chunk_text = text[start_py:end_py]
+        chunk_start_u16 = utf16_length(text[:start_py])
+        chunk_end_u16 = utf16_length(text[:end_py])
+
+        chunk_entities = []
+
+        for entity in entities or []:
+            entity_start = entity.offset
+            entity_end = entity.offset + entity.length
+
+            overlap_start = max(entity_start, chunk_start_u16)
+            overlap_end = min(entity_end, chunk_end_u16)
+
+            if overlap_start >= overlap_end:
+                continue
+
+            data = {
+                "type": entity.type,
+                "offset": overlap_start - chunk_start_u16,
+                "length": overlap_end - overlap_start
+            }
+
+            if entity.url is not None:
+                data["url"] = entity.url
+            if entity.language is not None:
+                data["language"] = entity.language
+            if entity.custom_emoji_id is not None:
+                data["custom_emoji_id"] = entity.custom_emoji_id
+            if entity.user is not None:
+                data["user"] = entity.user
+
+            chunk_entities.append(MessageEntity(**data))
+
+        chunks.append((chunk_text, chunk_entities))
+        start_py = end_py
+
+    return chunks
+
+
+# =========================================================
 # ОТПРАВКА ОДИНОЧНОГО СООБЩЕНИЯ АДМИНАМ
 # =========================================================
 
@@ -766,6 +1754,17 @@ async def send_single_submission_to_admins(
     sent_1 = None
     sent_2 = None
 
+    # Подпись к медиа в Telegram ограничена 1024 UTF-16 единицами.
+    # Поэтому длинный тейк отправляем: первая часть как caption,
+    # остальные части отдельными сообщениями.
+    caption_chunks = split_text_entities(
+        full_text,
+        content_entities,
+        1024
+    )
+
+    first_caption, first_entities = caption_chunks[0]
+
     if message.photo:
 
         file_id = message.photo[-1].file_id
@@ -773,16 +1772,16 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_photo(
             ADMIN_CHAT_ID_1,
             photo=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_photo(
             ADMIN_CHAT_ID_2,
             photo=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
@@ -793,16 +1792,16 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_video(
             ADMIN_CHAT_ID_1,
             video=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_video(
             ADMIN_CHAT_ID_2,
             video=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
@@ -813,33 +1812,65 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_document(
             ADMIN_CHAT_ID_1,
             document=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_document(
             ADMIN_CHAT_ID_2,
             document=file_id,
-            caption=full_text,
-            caption_entities=content_entities,
+            caption=first_caption,
+            caption_entities=first_entities,
             reply_markup=keyboard
         )
 
     else:
 
-        sent_1 = await bot.send_message(
-            ADMIN_CHAT_ID_1,
+        chunks = split_text_entities(
             full_text,
-            entities=content_entities,
-            reply_markup=keyboard
+            content_entities,
+            4096
         )
 
-        sent_2 = await bot.send_message(
+        sent_1 = None
+        sent_2 = None
+
+        for index, (chunk_text, chunk_entities) in enumerate(chunks):
+
+            current_keyboard = keyboard if index == 0 else None
+
+            current_1 = await bot.send_message(
+                ADMIN_CHAT_ID_1,
+                chunk_text,
+                entities=chunk_entities,
+                reply_markup=current_keyboard
+            )
+
+            current_2 = await bot.send_message(
+                ADMIN_CHAT_ID_2,
+                chunk_text,
+                entities=chunk_entities,
+                reply_markup=current_keyboard
+            )
+
+            if index == 0:
+                sent_1 = current_1
+                sent_2 = current_2
+
+    # Остаток длинной подписи отправляем обычными сообщениями.
+    for chunk_text, chunk_entities in caption_chunks[1:]:
+
+        await bot.send_message(
+            ADMIN_CHAT_ID_1,
+            chunk_text,
+            entities=chunk_entities
+        )
+
+        await bot.send_message(
             ADMIN_CHAT_ID_2,
-            full_text,
-            entities=content_entities,
-            reply_markup=keyboard
+            chunk_text,
+            entities=chunk_entities
         )
 
     conn = db_connect()
@@ -960,6 +1991,11 @@ async def anonymous_take_received(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
+
     if message.media_group_id:
 
         group_id = message.media_group_id
@@ -995,6 +2031,11 @@ async def non_anonymous_take_received(
     message: Message,
     state: FSMContext
 ):
+
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
 
     if message.media_group_id:
 
@@ -1036,6 +2077,11 @@ async def anonymous_question_received(
     state: FSMContext
 ):
 
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
+
     if message.media_group_id:
 
         group_id = message.media_group_id
@@ -1071,6 +2117,11 @@ async def non_anonymous_question_received(
     message: Message,
     state: FSMContext
 ):
+
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
 
     if message.media_group_id:
 
@@ -1111,6 +2162,11 @@ async def admin_application_received(
     message: Message,
     state: FSMContext
 ):
+
+    if is_user_banned(message.from_user.id):
+        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await state.clear()
+        return
 
     if message.media_group_id:
 
@@ -1264,56 +2320,8 @@ async def save_album(
 
 
 # =========================================================
-# ФИКСИРОВАННОЕ ОФОРМЛЕНИЕ ПУБЛИКАЦИИ
+# ПОЛУЧЕНИЕ ОФОРМЛЕНИЯ ДЛЯ ПУБЛИКАЦИИ
 # =========================================================
-
-# Эти три emoji всегда отправляются как Telegram Premium Emoji.
-PREMIUM_EMOJI = {
-    "⚔️": "5314749070743465097",  # меч
-    "🧹": "5316550294128062979",  # метла
-    "🔮": "5316655898783937992",  # кристалл
-}
-
-
-PUBLIC_TEMPLATE_TOP = (
-    "⚔️ ::  ¿?  𝐍𝐄𝐖 𝐓𝐀𝐊𝐄 *️⃣ 𝒃𝒚 "
-)
-
-PUBLIC_TEMPLATE_BOTTOM = (
-    "\n\n*️⃣ ¿? :: 🔮 нᴀᴨиᴄᴀᴛь ᴛᴇйᴋ @mkmhatebot_bot"
-)
-
-
-def make_premium_entities(text, start_offset=0):
-    """Создаёт custom_emoji entities для фиксированных emoji шаблона."""
-
-    result = []
-
-    for emoji, custom_emoji_id in PREMIUM_EMOJI.items():
-        search_from = 0
-
-        while True:
-            pos = text.find(emoji, search_from)
-
-            if pos == -1:
-                break
-
-            result.append(
-                MessageEntity(
-                    type="custom_emoji",
-                    offset=(
-                        start_offset
-                        + utf16_length(text[:pos])
-                    ),
-                    length=utf16_length(emoji),
-                    custom_emoji_id=custom_emoji_id
-                )
-            )
-
-            search_from = pos + len(emoji)
-
-    return result
-
 
 async def build_public_content(
     template_type,
@@ -1322,124 +2330,96 @@ async def build_public_content(
     user_entities=None
 ):
 
-    # Для анонимного тейка показываем "anonymous".
-    # Для неанонимного — username пользователя.
-    if template_type == "anonymous":
-        author = "anonymous"
-
-    else:
-        try:
-            user = await bot.get_chat(user_id)
-            author = (
-                f"@{user.username}"
-                if user.username
-                else str(user_id)
-            )
-
-        except Exception as error:
-            print(
-                "Ошибка получения пользователя:",
-                repr(error)
-            )
-            author = str(user_id)
-
-    body = text or ""
-
-    final_text = (
-        PUBLIC_TEMPLATE_TOP
-        + author
-        + "\n\n"
-        + body
-        + PUBLIC_TEMPLATE_BOTTOM
+    template = get_template(
+        template_type
     )
 
-    # Позиция начала самого текста тейка в UTF-16.
-    body_start = utf16_length(
-        PUBLIC_TEMPLATE_TOP
-        + author
-        + "\n\n"
+    # Если шаблон ещё не задан
+    if not template:
+
+        return text, user_entities or []
+
+    template_text, entities_json = template
+
+    entities = deserialize_entities(
+        entities_json
     )
 
-    final_entities = []
+    # -----------------------------------------------------
+    # Получаем пользователя
+    # -----------------------------------------------------
 
-    # Сам текст тейка — настоящая Telegram-цитата.
-    final_entities.append(
-        MessageEntity(
-            type="blockquote",
-            offset=body_start,
-            length=utf16_length(body)
+    try:
+
+        user = await bot.get_chat(
+            user_id
         )
-    )
 
-    # Сохраняем форматирование/ссылки пользователя внутри цитаты.
-    for source_entity in user_entities or []:
+        # Если username есть —
+        # используем его.
+        #
+        # Если username нет —
+        # используем ID.
+        if user.username:
 
-        source_start = source_entity.offset
-        source_end = source_start + source_entity.length
+            username = f"@{user.username}"
 
-        if source_start < 0 or source_end > utf16_length(body):
-            continue
+        else:
 
-        entity_data = {
-            "type": source_entity.type,
-            "offset": body_start + source_start,
-            "length": source_entity.length,
+            username = str(user_id)
+
+        name = user.full_name or "Пользователь"
+
+    except Exception as error:
+
+        print(
+            "Ошибка получения пользователя:",
+            repr(error)
+        )
+
+        username = str(user_id)
+        name = "Пользователь"
+
+    # -----------------------------------------------------
+    # Значения переменных
+    # -----------------------------------------------------
+
+    replacements = {
+        "{text}": text or "",
+        "{username}": username,
+        "{name}": name
+    }
+
+    print("ШАБЛОН ENTITIES:", [
+        {
+            "type": e.type,
+            "offset": e.offset,
+            "length": e.length,
+            "custom_emoji_id": e.custom_emoji_id
         }
+        for e in entities
+    ])
 
-        if source_entity.url is not None:
-            entity_data["url"] = source_entity.url
-
-        if source_entity.language is not None:
-            entity_data["language"] = source_entity.language
-
-        if source_entity.custom_emoji_id is not None:
-            entity_data["custom_emoji_id"] = source_entity.custom_emoji_id
-
-        if source_entity.user is not None:
-            entity_data["user"] = source_entity.user
-
-        # Не дублируем/не вкладываем ещё одну цитату пользователя.
-        if source_entity.type not in {
-            "blockquote",
-            "expandable_blockquote",
-        }:
-            final_entities.append(
-                MessageEntity(**entity_data)
-            )
-
-    # Премиум-эмодзи только из фиксированного шаблона.
-    # Эмодзи, которые пользователь написал внутри своего тейка,
-    # здесь специально НЕ заменяются.
-    final_entities.extend(
-        make_premium_entities(
-            PUBLIC_TEMPLATE_TOP + author + "\n\n"
-        )
+    final_text, final_entities = apply_template(
+        template_text,
+        entities,
+        replacements,
+        user_entities=user_entities
     )
 
-    bottom_start = utf16_length(
-        PUBLIC_TEMPLATE_TOP
-        + author
-        + "\n\n"
-        + body
-    )
+    print("ПОСЛЕ APPLY ENTITIES:", [
+        {
+            "type": e.type,
+            "offset": e.offset,
+            "length": e.length,
+            "custom_emoji_id": e.custom_emoji_id
+        }
+        for e in final_entities
+    ])
 
-    final_entities.extend(
-        make_premium_entities(
-            PUBLIC_TEMPLATE_BOTTOM,
-            start_offset=bottom_start
-        )
-    )
-
-    # Telegram ожидает entities в порядке offset.
-    final_entities.sort(
-        key=lambda entity: (
-            entity.offset,
-            -entity.length
-        )
-    )
+    print("ФИНАЛЬНЫЙ ТЕКСТ:", repr(final_text))
 
     return final_text, final_entities
-
 # =========================================================
 # ОПРЕДЕЛЕНИЕ ТИПА ШАБЛОНА
 # =========================================================
@@ -1823,6 +2803,153 @@ def find_submission_by_admin_message(
 
 
 # =========================================================
+# /BAN И /UNBAN
+# =========================================================
+
+async def get_user_from_admin_reply(message: Message):
+
+    if message.chat.id not in ADMIN_CHATS:
+        return None
+
+    if not message.reply_to_message:
+        await message.answer(
+            "❌ Используй команду ответом на тейк, вопрос или анкету."
+        )
+        return None
+
+    result = find_submission_by_admin_message(
+        message.reply_to_message.message_id
+    )
+
+    if not result:
+        await message.answer(
+            "❌ Не удалось найти пользователя этого сообщения."
+        )
+        return None
+
+    return result
+
+
+def build_message_link(message):
+
+    chat = message.chat
+
+    if getattr(chat, "username", None):
+        return f"https://t.me/{chat.username}/{message.message_id}"
+
+    if chat.id < 0:
+        chat_id = str(abs(chat.id))
+
+        if chat_id.startswith("100"):
+            chat_id = chat_id[3:]
+
+        return f"https://t.me/c/{chat_id}/{message.message_id}"
+
+    return None
+
+
+@dp.message(Command("ban"))
+async def ban_command(message: Message):
+
+    if message.chat.id not in ADMIN_CHATS:
+        return
+
+    result = await get_user_from_admin_reply(message)
+
+    if not result:
+        return
+
+    user_id = result[1]
+    replied_message = message.reply_to_message
+
+    username = None
+    name = None
+
+    try:
+        user_chat = await bot.get_chat(user_id)
+        username = user_chat.username
+        name = user_chat.full_name
+    except Exception:
+        pass
+
+    if not name:
+        name = "Неизвестно"
+
+    message_link = build_message_link(replied_message)
+
+    ban_user(
+        user_id,
+        message.from_user.id,
+        username,
+        name,
+        message_link
+    )
+
+    await message.answer("Пользователь заблокирован.")
+
+
+@dp.message(Command("banlist"))
+async def banlist_command(message: Message):
+
+    if message.chat.id not in ADMIN_CHATS:
+        return
+
+    rows = get_banned_users()
+
+    if not rows:
+        await message.answer("Банлист пуст.")
+        return
+
+    lines = ["<b>🚫 Банлист</b>"]
+
+    for index, (user_id, username, name, message_link, banned_at) in enumerate(rows, 1):
+
+        if username:
+            user_line = f"@{html.escape(username)}"
+        else:
+            user_line = f"ID: <code>{user_id}</code>"
+
+        name = html.escape(name or "Неизвестно")
+
+        if message_link:
+            message_line = f'<a href="{html.escape(message_link, quote=True)}">Открыть сообщение</a>'
+        else:
+            message_line = "Ссылка недоступна"
+
+        lines.append(
+            f"\n<b>{index}. {name}</b>\n"
+            f"Юзер: {user_line}\n"
+            f"ID: <code>{user_id}</code>\n"
+            f"Сообщение: {message_line}"
+        )
+
+    await message.answer(
+        "\n".join(lines),
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("unban"))
+async def unban_command(message: Message):
+
+    if message.chat.id not in ADMIN_CHATS:
+        return
+
+    result = await get_user_from_admin_reply(message)
+
+    if not result:
+        return
+
+    user_id = result[1]
+
+    if not unban_user(user_id):
+        await message.answer("Пользователь разблокирован.")
+        return
+
+    await message.answer("Пользователь разблокирован.")
+
+
+# =========================================================
 # /LINK
 # =========================================================
 
@@ -2119,6 +3246,14 @@ async def publish_handler(
 
             media_group = []
 
+            public_chunks = split_text_entities(
+                public_text,
+                public_entities,
+                1024
+            )
+
+            first_public_text, first_public_entities = public_chunks[0]
+
             for index, item in enumerate(
                 album_data
             ):
@@ -2127,13 +3262,13 @@ async def publish_handler(
                 item_file_id = item["file_id"]
 
                 current_caption = (
-                    public_text
+                    first_public_text
                     if index == 0
                     else None
                 )
 
                 current_entities = (
-                    public_entities
+                    first_public_entities
                     if index == 0
                     else None
                 )
@@ -2179,6 +3314,15 @@ async def publish_handler(
                 media=media_group
             )
 
+            # Caption у первого элемента альбома ограничен 1024 символами.
+            # Остаток длинного тейка публикуем отдельными сообщениями.
+            for chunk_text, chunk_entities in public_chunks[1:]:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
+
         # =================================================
         # ТЕКСТ
         # =================================================
@@ -2194,11 +3338,18 @@ async def publish_handler(
                 )
             )
 
-            await bot.send_message(
-                CHANNEL_ID,
+            chunks = split_text_entities(
                 public_text,
-                entities=public_entities
+                public_entities,
+                4096
             )
+
+            for chunk_text, chunk_entities in chunks:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
 
         # =================================================
         # ФОТО
@@ -2215,12 +3366,27 @@ async def publish_handler(
                 )
             )
 
+            public_chunks = split_text_entities(
+                public_text,
+                public_entities,
+                1024
+            )
+
+            first_text, first_entities = public_chunks[0]
+
             await bot.send_photo(
                 CHANNEL_ID,
                 photo=file_id,
-                caption=public_text,
-                caption_entities=public_entities
+                caption=first_text,
+                caption_entities=first_entities
             )
+
+            for chunk_text, chunk_entities in public_chunks[1:]:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
 
         # =================================================
         # ВИДЕО
@@ -2237,12 +3403,27 @@ async def publish_handler(
                 )
             )
 
+            public_chunks = split_text_entities(
+                public_text,
+                public_entities,
+                1024
+            )
+
+            first_text, first_entities = public_chunks[0]
+
             await bot.send_video(
                 CHANNEL_ID,
                 video=file_id,
-                caption=public_text,
-                caption_entities=public_entities
+                caption=first_text,
+                caption_entities=first_entities
             )
+
+            for chunk_text, chunk_entities in public_chunks[1:]:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
 
         # =================================================
         # ДОКУМЕНТ
@@ -2259,12 +3440,27 @@ async def publish_handler(
                 )
             )
 
+            public_chunks = split_text_entities(
+                public_text,
+                public_entities,
+                1024
+            )
+
+            first_text, first_entities = public_chunks[0]
+
             await bot.send_document(
                 CHANNEL_ID,
                 document=file_id,
-                caption=public_text,
-                caption_entities=public_entities
+                caption=first_text,
+                caption_entities=first_entities
             )
+
+            for chunk_text, chunk_entities in public_chunks[1:]:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    chunk_text,
+                    entities=chunk_entities
+                )
 
         else:
 
@@ -2332,31 +3528,6 @@ async def publish_handler(
                 pass
 
 
-# =========================================================
-# ПРАВИЛА
-# =========================================================
-
-@dp.message(F.text == "Правила")
-async def rules_handler(
-    message: Message
-):
-
-    await message.answer(
-        "Правила написания тейков в ВМН: Нельзя отправлять гс/кружки, спам, порнографию, личные данные. Допустимы темы про религию, политику и т.д., но запрещено выражать поддержку нацизму, фашизму, педофилии и т.п. Тейк должен быть связан с МКМ. Постоянное нытье и сожаления о том, что тейк не опубликован, не принимаются. Админы могут ответить или пообщаться. Полные правила можно увидеть в чате по команде “правила”.\n\n"
-        "1. неанон тейки в анон бота не принимаются, для этого есть неанон бот.\n"
-        "2. гс/кружки не принимаются.\n"
-        "3. тейк должен являться продолжением фразы 'в мкм ненавидят'. больше тейки с ссылками на соо где вы просто кому-то отвечаете не будут приниматься.\n"
-        "3.1. сливы выкладываются в любой форме и при любой формулировке.\n"
-        "4. в тейках можно упоминать темы про: религию, селфхарм, политику, нацизм и т.д, но любая поддержа войны, фашизма, нацизма, рассизма, геноцида, педофилии, инцеста так же запрещена как и в чате.\n"
-        "5. отправлять порнографию/расчлененку в чат/бота запрещено.\n"
-        "6. распространение чужих личных данных запрещено.\n"
-        "7. спам запрещен. за спам считается 3 одинаковых сообщения подряд.\n"
-        "8. если вы пишите про малоизвестного/нового человека в мкм то вставьте юз или ссылку на канал. админы не могут знать всех в мкм и не могут проверить связан ли ваш тейк с мкм.\n"
-        "9. ваше нытье, что люди все злые, что ненависть беспречинна так же больше выкладываться не будет. для этого пишите в другие проекты.\n"
-        "9.1. если ваш тейк не выкладывают больше 12 часов то продублируйте его. опять же, хныкаться, что ваш тейк не пропускают не стоит. мы либо проигнорируем это, либо забаним. давайте уважать время и силы админов.\n"
-        "10. все админы имеют доступ к тому, чтобы вам ответить и с вами поговорить. не удивляйтесь:(\n\n"
-        "правила чата находятся в самом чате. просто напишите команду 'правила' и прочитайте их. проявляйте уважение к администрации. всем удачи!"
-    )
 
 
 # =========================================================
