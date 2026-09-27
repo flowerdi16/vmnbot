@@ -1279,7 +1279,7 @@ async def rules_handler(
         "Правила написания тейков в ВМН: Нельзя отправлять гс/кружки, спам, порнографию, личные данные. Допустимы темы про религию, политику и т.д., но запрещено выражать поддержку нацизму, фашизму, педофилии и т.п. Тейк должен быть связан с МКМ. Постоянное нытье и сожаления о том, что тейк не опубликован, не принимаются. Админы могут ответить или пообщаться. Полные правила можно увидеть в чате по команде “правила”.\n\n"
         "1. неанон тейки в анон бота не принимаются, для этого есть неанон бот.\n"
         "2. гс/кружки не принимаются.\n"
-        "3. тейк должен являться продолжением фразы 'в мкм ненавидят'. больше тейки с ссылками на соо где вы просто кому-то отвечаете не будут приниматься.\n"
+        "3. тейки с ссылками на соо где вы просто кому-то отвечаете не будут приниматься.\n"
         "3.1. сливы выкладываются в любой форме и при любой формулировке.\n"
         "4. в тейках можно упоминать темы про: религию, селфхарм, политику, нацизм и т.д, но любая поддержа войны, фашизма, нацизма, рассизма, геноцида, педофилии, инцеста так же запрещена как и в чате.\n"
         "5. отправлять порнографию/расчлененку в чат/бота запрещено.\n"
@@ -1304,7 +1304,7 @@ async def anonymous_take_start(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         return
 
     await state.set_state(
@@ -1328,7 +1328,7 @@ async def non_anonymous_take_start(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         return
 
     await state.set_state(
@@ -1352,7 +1352,7 @@ async def question_start(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         return
 
     await state.clear()
@@ -1376,7 +1376,7 @@ async def question_back_handler(
     if is_user_banned(callback.from_user.id):
         await safe_callback_answer(
             callback,
-            "🚫 Вы заблокированы.",
+            "Вы заблокированы.",
             show_alert=True
         )
         return
@@ -1409,7 +1409,7 @@ async def anonymous_question_start(
     if is_user_banned(callback.from_user.id):
         await safe_callback_answer(
             callback,
-            "🚫 Вы заблокированы.",
+            "Вы заблокированы.",
             show_alert=True
         )
         return
@@ -1445,7 +1445,7 @@ async def non_anonymous_question_start(
     if is_user_banned(callback.from_user.id):
         await safe_callback_answer(
             callback,
-            "🚫 Вы заблокированы.",
+            "Вы заблокированы.",
             show_alert=True
         )
         return
@@ -1476,7 +1476,7 @@ async def admin_application_start(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         return
 
     await state.set_state(
@@ -1856,8 +1856,8 @@ async def process_single_take(
     if not valid_length:
 
         await message.answer(
-            "❌ Сообщение превышает лимит символов для обработки.\n\n"
-            f"Максимум после добавления оформления: {limit}."
+            "Сообщение превышает лимит символов для обработки!\n\n"
+            f"Максимум символов: {limit}."
         )
 
         return
@@ -1887,9 +1887,8 @@ async def process_single_take(
         )
 
         await message.answer(
-            "❌ Не удалось обработать сообщение.\n\n"
-            "Возможно, оно превышает допустимый лимит Telegram "
-            "после добавления оформления."
+            "Не удалось обработать сообщение.\n\n"
+            "Возможно, оно превышает допустимый лимит."
         )
 
         return
@@ -1966,7 +1965,7 @@ async def anonymous_take_received(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         await state.clear()
         return
 
@@ -2007,7 +2006,7 @@ async def non_anonymous_take_received(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         await state.clear()
         return
 
@@ -2052,7 +2051,7 @@ async def anonymous_question_received(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         await state.clear()
         return
 
@@ -2093,7 +2092,7 @@ async def non_anonymous_question_received(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         await state.clear()
         return
 
@@ -2138,7 +2137,7 @@ async def admin_application_received(
 ):
 
     if is_user_banned(message.from_user.id):
-        await message.answer("🚫 Вы заблокированы и не можете пользоваться ботом.")
+        await message.answer("Вы заблокированы и не можете пользоваться ботом.")
         await state.clear()
         return
 
@@ -2811,7 +2810,7 @@ async def get_user_from_admin_reply(message: Message):
 
     if not message.reply_to_message:
         await message.answer(
-            "❌ Используй команду ответом на тейк, вопрос или анкету."
+            "Используй команду ответом на тейк, вопрос или анкету."
         )
         return None
 
@@ -2821,7 +2820,7 @@ async def get_user_from_admin_reply(message: Message):
 
     if not result:
         await message.answer(
-            "❌ Не удалось найти пользователя этого сообщения."
+            "Не удалось найти пользователя этого сообщения."
         )
         return None
 
@@ -2963,7 +2962,7 @@ async def link_handler(
     if not message.reply_to_message:
 
         await message.answer(
-            "❌ Используй /link ответом "
+            "Используй /link ответом "
             "на тейк, вопрос или анкету."
         )
 
@@ -2976,7 +2975,7 @@ async def link_handler(
     if not result:
 
         await message.answer(
-            "❌ Не удалось найти автора "
+            "Не удалось найти автора "
             "этого сообщения."
         )
 
@@ -3100,7 +3099,7 @@ async def admin_reply_handler(
         )
 
         await message.answer(
-            "❌ Не удалось отправить ответ пользователю.\n\n"
+            "Не удалось отправить ответ пользователю.\n\n"
             "Возможно, пользователь заблокировал бота."
         )
 
