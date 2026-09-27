@@ -262,7 +262,7 @@ def back_menu():
 
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="⬅️ Назад")]
+            [KeyboardButton(text="<-- Назад")]
         ],
         resize_keyboard=True
     )
@@ -290,7 +290,7 @@ def question_menu():
             ],
             [
                 InlineKeyboardButton(
-                    text="⬅️ Назад",
+                    text="<-- Назад",
                     callback_data="question:back"
                 )
             ]
@@ -1252,7 +1252,7 @@ async def receive_template(
 # НАЗАД
 # =========================================================
 
-@dp.message(F.text == "⬅️ Назад")
+@dp.message(F.text == "<-- Назад")
 async def back_handler(message: Message, state: FSMContext):
 
     await state.clear()
@@ -1627,82 +1627,6 @@ def question_header(
 
 
 # =========================================================
-# РАЗБИВКА ДЛИННОГО ТЕКСТА
-# =========================================================
-
-def split_text_entities(text, entities, max_length):
-
-    if utf16_length(text) <= max_length:
-        return [(text, entities or [])]
-
-    chunks = []
-    start_py = 0
-    text_len = len(text)
-
-    while start_py < text_len:
-
-        remaining = text[start_py:]
-        if utf16_length(remaining) <= max_length:
-            end_py = text_len
-        else:
-            end_py = start_py
-            current_u16 = 0
-
-            while end_py < text_len:
-                char_len = utf16_length(text[end_py])
-                if current_u16 + char_len > max_length:
-                    break
-                current_u16 += char_len
-                end_py += 1
-
-            # Стараемся не резать слово.
-            space = text.rfind(" ", start_py, end_py)
-            newline = text.rfind("\n", start_py, end_py)
-            boundary = max(space, newline)
-
-            if boundary > start_py + 100:
-                end_py = boundary + 1
-
-        chunk_text = text[start_py:end_py]
-        chunk_start_u16 = utf16_length(text[:start_py])
-        chunk_end_u16 = utf16_length(text[:end_py])
-
-        chunk_entities = []
-
-        for entity in entities or []:
-            entity_start = entity.offset
-            entity_end = entity.offset + entity.length
-
-            overlap_start = max(entity_start, chunk_start_u16)
-            overlap_end = min(entity_end, chunk_end_u16)
-
-            if overlap_start >= overlap_end:
-                continue
-
-            data = {
-                "type": entity.type,
-                "offset": overlap_start - chunk_start_u16,
-                "length": overlap_end - overlap_start
-            }
-
-            if entity.url is not None:
-                data["url"] = entity.url
-            if entity.language is not None:
-                data["language"] = entity.language
-            if entity.custom_emoji_id is not None:
-                data["custom_emoji_id"] = entity.custom_emoji_id
-            if entity.user is not None:
-                data["user"] = entity.user
-
-            chunk_entities.append(MessageEntity(**data))
-
-        chunks.append((chunk_text, chunk_entities))
-        start_py = end_py
-
-    return chunks
-
-
-# =========================================================
 # ОТПРАВКА ОДИНОЧНОГО СООБЩЕНИЯ АДМИНАМ
 # =========================================================
 
@@ -1754,17 +1678,6 @@ async def send_single_submission_to_admins(
     sent_1 = None
     sent_2 = None
 
-    # Подпись к медиа в Telegram ограничена 1024 UTF-16 единицами.
-    # Поэтому длинный тейк отправляем: первая часть как caption,
-    # остальные части отдельными сообщениями.
-    caption_chunks = split_text_entities(
-        full_text,
-        content_entities,
-        1024
-    )
-
-    first_caption, first_entities = caption_chunks[0]
-
     if message.photo:
 
         file_id = message.photo[-1].file_id
@@ -1772,16 +1685,16 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_photo(
             ADMIN_CHAT_ID_1,
             photo=file_id,
-            caption=first_caption,
-            caption_entities=first_entities,
+            caption=full_text,
+            caption_entities=content_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_photo(
             ADMIN_CHAT_ID_2,
             photo=file_id,
-            caption=first_caption,
-            caption_entities=first_entities,
+            caption=full_text,
+            caption_entities=content_entities,
             reply_markup=keyboard
         )
 
@@ -1792,16 +1705,16 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_video(
             ADMIN_CHAT_ID_1,
             video=file_id,
-            caption=first_caption,
-            caption_entities=first_entities,
+            caption=full_text,
+            caption_entities=content_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_video(
             ADMIN_CHAT_ID_2,
             video=file_id,
-            caption=first_caption,
-            caption_entities=first_entities,
+            caption=full_text,
+            caption_entities=content_entities,
             reply_markup=keyboard
         )
 
@@ -1812,65 +1725,33 @@ async def send_single_submission_to_admins(
         sent_1 = await bot.send_document(
             ADMIN_CHAT_ID_1,
             document=file_id,
-            caption=first_caption,
-            caption_entities=first_entities,
+            caption=full_text,
+            caption_entities=content_entities,
             reply_markup=keyboard
         )
 
         sent_2 = await bot.send_document(
             ADMIN_CHAT_ID_2,
             document=file_id,
-            caption=first_caption,
-            caption_entities=first_entities,
+            caption=full_text,
+            caption_entities=content_entities,
             reply_markup=keyboard
         )
 
     else:
 
-        chunks = split_text_entities(
-            full_text,
-            content_entities,
-            4096
-        )
-
-        sent_1 = None
-        sent_2 = None
-
-        for index, (chunk_text, chunk_entities) in enumerate(chunks):
-
-            current_keyboard = keyboard if index == 0 else None
-
-            current_1 = await bot.send_message(
-                ADMIN_CHAT_ID_1,
-                chunk_text,
-                entities=chunk_entities,
-                reply_markup=current_keyboard
-            )
-
-            current_2 = await bot.send_message(
-                ADMIN_CHAT_ID_2,
-                chunk_text,
-                entities=chunk_entities,
-                reply_markup=current_keyboard
-            )
-
-            if index == 0:
-                sent_1 = current_1
-                sent_2 = current_2
-
-    # Остаток длинной подписи отправляем обычными сообщениями.
-    for chunk_text, chunk_entities in caption_chunks[1:]:
-
-        await bot.send_message(
+        sent_1 = await bot.send_message(
             ADMIN_CHAT_ID_1,
-            chunk_text,
-            entities=chunk_entities
+            full_text,
+            entities=content_entities,
+            reply_markup=keyboard
         )
 
-        await bot.send_message(
+        sent_2 = await bot.send_message(
             ADMIN_CHAT_ID_2,
-            chunk_text,
-            entities=chunk_entities
+            full_text,
+            entities=content_entities,
+            reply_markup=keyboard
         )
 
     conn = db_connect()
@@ -1896,6 +1777,67 @@ async def send_single_submission_to_admins(
 
 
 # =========================================================
+# ПРОВЕРКА ЛИМИТА ПЕРЕД ОБРАБОТКОЙ
+# =========================================================
+
+def get_processing_limit(message: Message) -> int:
+
+    # Для подписи к фото/видео/документу Telegram использует
+    # отдельный лимит 1024 UTF-16 единицы.
+    if (
+        message.photo
+        or message.video
+        or message.document
+    ):
+        return 1024
+
+    # Для обычного текстового сообщения — 4096.
+    return 4096
+
+
+def check_message_length(
+    message: Message,
+    anonymous: bool,
+    submission_type: str
+):
+
+    if submission_type == "question":
+
+        header = question_header(
+            message,
+            anonymous
+        )
+
+    elif submission_type == "application":
+
+        author = get_author_text(
+            message.from_user
+        )
+
+        header = (
+            "НОВАЯ АНКЕТА!\n"
+            f"Анкета от: {author}"
+        )
+
+    else:
+
+        header = take_header(
+            message,
+            anonymous
+        )
+
+    full_text, _ = build_admin_content(
+        message,
+        header
+    )
+
+    limit = get_processing_limit(message)
+    current_length = utf16_length(full_text)
+
+    return current_length <= limit, current_length, limit
+
+
+# =========================================================
 # ОБРАБОТКА ТЕЙКА
 # =========================================================
 
@@ -1905,6 +1847,21 @@ async def process_single_take(
     state: FSMContext
 ):
 
+    valid_length, current_length, limit = check_message_length(
+        message,
+        anonymous,
+        "take"
+    )
+
+    if not valid_length:
+
+        await message.answer(
+            "❌ Сообщение превышает лимит символов для обработки.\n\n"
+            f"Максимум после добавления оформления: {limit}."
+        )
+
+        return
+
     await state.clear()
 
     submission_id = await save_submission(
@@ -1913,12 +1870,29 @@ async def process_single_take(
         "take"
     )
 
-    await send_single_submission_to_admins(
-        message,
-        submission_id,
-        anonymous,
-        "take"
-    )
+    try:
+
+        await send_single_submission_to_admins(
+            message,
+            submission_id,
+            anonymous,
+            "take"
+        )
+
+    except TelegramBadRequest as error:
+
+        print(
+            "Ошибка отправки тейка администраторам:",
+            repr(error)
+        )
+
+        await message.answer(
+            "❌ Не удалось обработать сообщение.\n\n"
+            "Возможно, оно превышает допустимый лимит Telegram "
+            "после добавления оформления."
+        )
+
+        return
 
     confirmation = await message.answer(
         "Сообщение доставлено!"
@@ -2651,6 +2625,30 @@ async def finish_album(
         key=lambda msg: msg.message_id
     )
 
+    # Подпись альбома тоже должна помещаться в лимит Telegram.
+    caption_message = next(
+        (msg for msg in messages if msg.caption),
+        None
+    )
+
+    if caption_message:
+
+        valid_length, current_length, limit = check_message_length(
+            caption_message,
+            anonymous,
+            submission_type
+        )
+
+        if not valid_length:
+
+            await first_message.answer(
+                "❌ Сообщение превышает лимит символов для обработки.\n\n"
+                f"Максимум после добавления оформления: {limit}."
+            )
+
+            await state.clear()
+            return
+
     submission_id = await save_album(
         messages,
         anonymous,
@@ -3246,13 +3244,14 @@ async def publish_handler(
 
             media_group = []
 
-            public_chunks = split_text_entities(
-                public_text,
-                public_entities,
-                1024
-            )
+            if utf16_length(public_text) > 1024:
+                raise ValueError(
+                    "Оформленный тейк превышает лимит Telegram "
+                    "для подписи к альбому (1024)."
+                )
 
-            first_public_text, first_public_entities = public_chunks[0]
+            first_public_text = public_text
+            first_public_entities = public_entities
 
             for index, item in enumerate(
                 album_data
@@ -3314,14 +3313,6 @@ async def publish_handler(
                 media=media_group
             )
 
-            # Caption у первого элемента альбома ограничен 1024 символами.
-            # Остаток длинного тейка публикуем отдельными сообщениями.
-            for chunk_text, chunk_entities in public_chunks[1:]:
-                await bot.send_message(
-                    CHANNEL_ID,
-                    chunk_text,
-                    entities=chunk_entities
-                )
 
         # =================================================
         # ТЕКСТ
@@ -3338,18 +3329,17 @@ async def publish_handler(
                 )
             )
 
-            chunks = split_text_entities(
-                public_text,
-                public_entities,
-                4096
-            )
-
-            for chunk_text, chunk_entities in chunks:
-                await bot.send_message(
-                    CHANNEL_ID,
-                    chunk_text,
-                    entities=chunk_entities
+            if utf16_length(public_text) > 4096:
+                raise ValueError(
+                    "Оформленный тейк превышает лимит Telegram "
+                    "в 4096 символов."
                 )
+
+            await bot.send_message(
+                CHANNEL_ID,
+                public_text,
+                entities=public_entities
+            )
 
         # =================================================
         # ФОТО
@@ -3366,13 +3356,14 @@ async def publish_handler(
                 )
             )
 
-            public_chunks = split_text_entities(
-                public_text,
-                public_entities,
-                1024
-            )
+            if utf16_length(public_text) > 1024:
+                raise ValueError(
+                    "Оформленный тейк превышает лимит Telegram "
+                    "для подписи к медиа (1024)."
+                )
 
-            first_text, first_entities = public_chunks[0]
+            first_text = public_text
+            first_entities = public_entities
 
             await bot.send_photo(
                 CHANNEL_ID,
@@ -3381,12 +3372,6 @@ async def publish_handler(
                 caption_entities=first_entities
             )
 
-            for chunk_text, chunk_entities in public_chunks[1:]:
-                await bot.send_message(
-                    CHANNEL_ID,
-                    chunk_text,
-                    entities=chunk_entities
-                )
 
         # =================================================
         # ВИДЕО
@@ -3403,13 +3388,14 @@ async def publish_handler(
                 )
             )
 
-            public_chunks = split_text_entities(
-                public_text,
-                public_entities,
-                1024
-            )
+            if utf16_length(public_text) > 1024:
+                raise ValueError(
+                    "Оформленный тейк превышает лимит Telegram "
+                    "для подписи к медиа (1024)."
+                )
 
-            first_text, first_entities = public_chunks[0]
+            first_text = public_text
+            first_entities = public_entities
 
             await bot.send_video(
                 CHANNEL_ID,
@@ -3418,12 +3404,6 @@ async def publish_handler(
                 caption_entities=first_entities
             )
 
-            for chunk_text, chunk_entities in public_chunks[1:]:
-                await bot.send_message(
-                    CHANNEL_ID,
-                    chunk_text,
-                    entities=chunk_entities
-                )
 
         # =================================================
         # ДОКУМЕНТ
@@ -3440,13 +3420,14 @@ async def publish_handler(
                 )
             )
 
-            public_chunks = split_text_entities(
-                public_text,
-                public_entities,
-                1024
-            )
+            if utf16_length(public_text) > 1024:
+                raise ValueError(
+                    "Оформленный тейк превышает лимит Telegram "
+                    "для подписи к медиа (1024)."
+                )
 
-            first_text, first_entities = public_chunks[0]
+            first_text = public_text
+            first_entities = public_entities
 
             await bot.send_document(
                 CHANNEL_ID,
@@ -3455,12 +3436,6 @@ async def publish_handler(
                 caption_entities=first_entities
             )
 
-            for chunk_text, chunk_entities in public_chunks[1:]:
-                await bot.send_message(
-                    CHANNEL_ID,
-                    chunk_text,
-                    entities=chunk_entities
-                )
 
         else:
 
