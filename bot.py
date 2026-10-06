@@ -997,9 +997,36 @@ def apply_template(
         final_entities.append(
             MessageEntity(**source_data)
         )
+    # Нормализуем MessageEntity перед отправкой в Telegram.
+    # Telegram использует UTF-16 offsets.
+    final_text_u16 = utf16_length(final_text)
+
+    valid_entities = []
+
+    for entity in final_entities:
+        start = entity.offset
+        end = entity.offset + entity.length
+
+        # Entity должна полностью находиться внутри текста
+        if start < 0 or entity.length < 0 or end > final_text_u16:
+            continue
+
+        # Начало и конец entity должны приходиться
+        # на границы Unicode-символов, а не внутрь surrogate pair.
+        try:
+            prefix = final_text.encode("utf-16-le")[:start * 2]
+            entity_text = final_text.encode("utf-16-le")[start * 2:end * 2]
+
+            prefix.decode("utf-16-le")
+            entity_text.decode("utf-16-le")
+        except UnicodeDecodeError:
+            continue
+
+        valid_entities.append(entity)
+
+    final_entities = valid_entities
 
     return final_text, final_entities
-
 # =========================================================
 # START
 # =========================================================
